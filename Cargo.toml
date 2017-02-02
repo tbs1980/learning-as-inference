@@ -1,0 +1,8 @@
+[package]
+name = "learning-as-inference"
+version = "0.1.0"
+authors = ["Sreekumar Thaithara Balan <tbs1980@gmail.com>"]
+
+[dependencies]
+rulinalg="0.4.1"
+rand = "0.3"
