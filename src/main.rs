@@ -1,89 +1,154 @@
 extern crate rulinalg;
 extern crate rand;
 
-use rulinalg::vector::Vector;
-use rulinalg::matrix::Matrix;
-use rulinalg::matrix::BaseMatrix;
-use rand::distributions::{Normal, IndependentSample};
+use rand::distributions::{Normal, Range, IndependentSample};
 
 fn sigmoid(v: f64) ->f64 {
     1.0_f64 / (1.0_f64 + (-v).exp())
 }
 
 struct SingleNeuronClassifier {
-    data_x : Matrix<f64>,
-    class_t : Vector<f64>
+    x: Vec<Vec<f64>>,
+    t: Vec<f64>
 }
 
 impl SingleNeuronClassifier {
-    fn log_posterior(&self, w: Vector<f64>) -> f64{
-        assert_eq!(w.size(), self.data_x.cols());
+    fn log_posterior(&self, w: &Vec<f64>) -> f64{
+        assert_eq!(w.len(), self.x[0].len());
+        let num_params = w.len();
+        let num_data_points = self.x.len();
         let mut g_w: f64 = 0_f64;
-        for ind_i in 0..self.data_x.rows() {
-            let data_x_row = self.data_x.row(ind_i);
-            let data_x_row_1 : Vector<f64> = data_x_row.into();
-            let a = data_x_row_1.dot(&w);
+        for i in 0..num_data_points {
+            let ref x_row = self.x[i];
+            let mut a: f64 = 0_f64;
+            for j in 0..num_params {
+                a += x_row[j]*w[j];
+            }
             let y: f64 = sigmoid(a);
-            g_w -= self.class_t[ind_i]*(y).ln() + ( 1_f64 - self.class_t[ind_i]*(1_f64 - y).ln() );
+            assert!(y > 0_f64);
+            assert!(y < 1_f64);
+            g_w -= self.t[i]*(y).ln() + ( 1_f64 - self.t[i] )*(1_f64 - y).ln();
         }
         let mut e_w = 0_f64;
-        for ind_j in 0..w.size() {
-            e_w += w[ind_j]*w[ind_j];
+        for j in 0..num_params {
+            e_w += w[j]*w[j];
         }
-        e_w *= 0.5;
+        e_w *= 0.5_f64;
         let alpha = 1_f64;
         return g_w + alpha*e_w;
     }
-}
 
-impl SingleNeuronClassifier {
-    fn grad_log_posterior(&self, w: Vector<f64>) -> Vector<f64> {
-        assert_eq!(w.size(), self.data_x.cols());
-        let mut grad_w = Vector::<f64>::zeros(w.size());
-        for ind_i in 0..self.data_x.rows() {
-            let data_x_row = self.data_x.row(ind_i);
-            let data_x_row_1 : Vector<f64> = data_x_row.into();
-            let a = data_x_row_1.dot(&w);
+    fn grad_log_posterior(&self, w: &Vec<f64>) -> Vec<f64> {
+        assert_eq!(w.len(), self.x[0].len());
+        let num_params = w.len();
+        let num_data_points = self.x.len();
+        let mut g_w = vec![0_f64; num_params];
+        for i in 0..num_data_points {
+            let ref x_row = self.x[i];
+            let mut a: f64 = 0_f64;
+            for j in 0..num_params {
+                a += x_row[j]*w[j];
+            }
             let y: f64 = sigmoid(a);
-            let err = self.class_t[ind_i] - y;
-            for ind_j in 0..w.size() {
-                grad_w[ind_j] -= err*self.data_x[[ind_i, ind_j]];
+            let err = self.t[i] - y;
+            for j in 0..num_params {
+                g_w[j] -= err*self.x[i][j];
             }
         }
         let alpha = 1_f64;
-        grad_w += w*alpha;
-        return grad_w;
+        for j in 0..num_params {
+            g_w[j] += w[j]*alpha;
+        }
+        return g_w;
+    }
+
+    fn generate_samples_with_hmc(&self, num_samples: usize) {
+        let num_params = self.x[0].len();;
+        let normal = Normal::new(0_f64, 1_f64);
+        let uniform = Range::new(0_f64, 1_f64);
+        let mut samps_acc: usize = 0;
+        let mut tot_samps: usize = 0;
+        let mut w = vec![0_f64; num_params];
+        for j in 0..num_params {
+            w[j] = uniform.ind_sample(&mut rand::thread_rng());
+        }
+        let num_steps: usize = 10;
+        let epsilon: f64 = 1e-4;
+        while samps_acc < num_samples {
+            let mut p = vec![0_f64; num_params];
+            for j in 0..num_params {
+                p[j] = normal.ind_sample(&mut rand::thread_rng());
+            }
+            let mut pot_eng: f64 = self.log_posterior(&w);
+            let mut kin_eng: f64 = 0_f64;
+            for j in 0..num_params {
+                kin_eng += p[j]*p[j];
+            }
+            let hamilt = kin_eng + pot_eng;
+            let mut w_new = vec![0_f64; num_params];
+            for j in 0..num_params {
+                w_new[j] = w[j];
+            }
+
+            let mut g_new = self.grad_log_posterior(&w_new);
+            for _ in 0..num_steps {
+                for j in 0..num_params {
+                    p[j] = p[j] - 0.5*epsilon*g_new[j];
+                    w_new[j] = w_new[j] + epsilon*p[j]
+                }
+                g_new = self.grad_log_posterior(&w_new);
+                for j in 0..num_params {
+                    p[j] = p[j] - 0.5*epsilon*g_new[j];
+                }
+            }
+            pot_eng = self.log_posterior(&w_new);
+            kin_eng = 0_f64;
+            for j in 0..num_params {
+                kin_eng += p[j]*p[j];
+            }
+            let hamilt_new: f64 = kin_eng + pot_eng;
+            let delta_h: f64 = hamilt_new - hamilt;
+            // println!("delta_h = {}", delta_h);
+
+            let rand_uni: f64 = uniform.ind_sample(&mut rand::thread_rng());
+            // println!("rand_uni = {}", rand_uni);
+            if delta_h < 0_f64 || rand_uni < (-delta_h).exp(){
+                for j in 0..num_params {
+                    w[j] = w_new[j];
+                }
+                samps_acc += 1;
+            }
+            tot_samps +=1;
+            println!("samples generated = {} samples accepted = {}",tot_samps, samps_acc );
+        }
+        let acc_rate: f64 = (samps_acc as f64) / (tot_samps as f64);
+        println!("acceptance rate = {} ",  acc_rate);
     }
 }
 
 fn main() {
     let num_data_points: usize = 200;
-    let num_dim: usize = 2;
-    let mut data_x = Matrix::<f64>::zeros(num_data_points, num_dim+1);
-    let mut class_t = Vector::<f64>::zeros(num_data_points);
+    let num_dims: usize = 2;
+    let mut x = vec![vec![0_f64; num_dims+1]; num_data_points];
+    let mut t = vec![0_f64; num_data_points];
 
-    let normal = Normal::new(0.0, 0.3);
+    let normal = Normal::new(0.0_f64, 1.0_f64);
 
-    for ind_i in 0..num_data_points {
-        data_x[[ind_i,0]] = 1.0_f64;
-        for ind_j in 1..num_dim+1 {
+    for i in 0..num_data_points {
+        x[i][0] = 1.0_f64;
+        for j in 1..num_dims+1 {
             let v = normal.ind_sample(&mut rand::thread_rng());
-            if ind_i < num_data_points / 2 {
-                data_x[[ind_i,ind_j]] = v + 1.0_f64;
-                class_t[ind_i] = 0.0_f64
+            if i < num_data_points / 2 {
+                x[i][j] = v + 1.0_f64;
+                t[i] = 0.0_f64
             } else {
-                data_x[[ind_i,ind_j]] = v + 3.0_f64;
-                class_t[ind_i] = 1.0_f64
+                x[i][j] = v + 3.0_f64;
+                t[i] = 1.0_f64
             }
         }
     }
-    let snc = SingleNeuronClassifier{data_x: data_x, class_t: class_t};
+    let snc = SingleNeuronClassifier{x: x, t: t};
 
-    let weights_w = Vector::<f64>::zeros(num_dim+1);
-    let log_posterior_val = snc.log_posterior(weights_w);
-    println!("the log posterior value is {}", log_posterior_val);
-
-    let weights_w_1 = Vector::<f64>::zeros(num_dim+1);
-    let grad_log_posterior_val = snc.grad_log_posterior(weights_w_1);
-    println!("the gradient of the log posterior is {}", grad_log_posterior_val);
+    let num_samples: usize = 10;
+    snc.generate_samples_with_hmc(num_samples);
 }
