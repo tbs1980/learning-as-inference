@@ -1,7 +1,9 @@
-extern crate rulinalg;
 extern crate rand;
+extern crate csv;
 
+use std::path::Path;
 use rand::distributions::{Normal, Range, IndependentSample};
+use csv::Writer;
 
 fn sigmoid(v: f64) ->f64 {
     1.0_f64 / (1.0_f64 + (-v).exp())
@@ -62,7 +64,7 @@ impl SingleNeuronClassifier {
         return g_w;
     }
 
-    fn generate_samples_with_hmc(&self, num_samples: usize) {
+    fn generate_samples_with_hmc(&self, num_samples: usize) -> Vec<Vec<f64>> {
         let num_params = self.x[0].len();;
         let normal = Normal::new(0_f64, 1_f64);
         let uniform = Range::new(0_f64, 1_f64);
@@ -73,7 +75,8 @@ impl SingleNeuronClassifier {
             w[j] = uniform.ind_sample(&mut rand::thread_rng());
         }
         let num_steps: usize = 10;
-        let epsilon: f64 = 1e-4;
+        let epsilon: f64 = 1e-3;
+        let mut samples: Vec<Vec<f64>> = Vec::new();
         while samps_acc < num_samples {
             let mut p = vec![0_f64; num_params];
             for j in 0..num_params {
@@ -117,12 +120,13 @@ impl SingleNeuronClassifier {
                     w[j] = w_new[j];
                 }
                 samps_acc += 1;
+                samples.push(w_new);
             }
             tot_samps +=1;
-            println!("samples generated = {} samples accepted = {}",tot_samps, samps_acc );
         }
         let acc_rate: f64 = (samps_acc as f64) / (tot_samps as f64);
         println!("acceptance rate = {} ",  acc_rate);
+        return samples;
     }
 }
 
@@ -149,6 +153,12 @@ fn main() {
     }
     let snc = SingleNeuronClassifier{x: x, t: t};
 
-    let num_samples: usize = 10;
-    snc.generate_samples_with_hmc(num_samples);
+    let num_samples: usize = 10000;
+    let samples = snc.generate_samples_with_hmc(num_samples);
+
+    let path = Path::new("samples.csv");
+    let mut writer = Writer::from_file(path).unwrap();
+    for row in samples.into_iter() {
+        writer.encode(row).expect("CSV writer error");
+    }
 }
